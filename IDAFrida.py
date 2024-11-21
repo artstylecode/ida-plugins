@@ -294,7 +294,7 @@ class GenerateFridaHookScript(IDAFridaMenuAction):
 
 class RunGeneratedScript(IDAFridaMenuAction):
     description = "Run Generated Script"
-    session: frida.core.Session = None
+    session: fridahelper.core.Session = None
     out_file = None
     log_file = None
     def __init__(self):
@@ -302,7 +302,7 @@ class RunGeneratedScript(IDAFridaMenuAction):
         idb_path = os.path.dirname(idaapi.get_input_file_path())
         self.out_file = os.path.join(idb_path, "IDAhook.js")
         self.log_file = os.path.join(idb_path, "IDAhook.log")
-        self.device: frida.core.Device = frida.get_usb_device()
+        self.device: fridahelper.core.Device = fridahelper.get_usb_device()
         print("device:", self.device)
        
        

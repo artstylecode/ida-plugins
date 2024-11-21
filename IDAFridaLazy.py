@@ -251,12 +251,12 @@ class RunGeneratedScript(IDAFridaMenuAction):
         date = datetime.datetime.now()
         formatted_date = date.strftime("%Y%m%d%H%M%S")
         log_file = os.path.join(idb_path, "{}_{}.log".format(self.func_name, formatted_date))
-        #print("{}{}\n".format(message, data))
-        content = "{}\n".format(message['payload'])
-        print(content)
+        print("{}{}\n".format(message, data))
+        # content = "{}\n".format(message['payload'])
+        # print(content)
         
-        with open(log_file, "w+") as f:
-            f.write(content) 
+        # with open(log_file, "w+") as f:
+        #     f.write(content) 
 
 print("IDAFridLazy!")
 
