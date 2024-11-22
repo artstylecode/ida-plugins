@@ -243,7 +243,7 @@ class HookConfigurationUi():
         cwdPath = os.environ['IDA_PLUGINS']
         self.ui = uic.loadUi("{}{}hook.ui".format(cwdPath, os.sep))
         self.ui.edit_hook_num.setText(str(params_num))
-        self.ui.te_print_args.setPlainText(default_print_info)
+        #self.ui.te_print_args.setPlainText(default_print_info)
         self.hook_addr_list = hook_addr_list
         self.func_name = func_name
         self.ui.btn_hook.clicked.connect(self.btn_hook_click)
@@ -253,6 +253,7 @@ class HookConfigurationUi():
         hook_num = int(self.ui.edit_hook_num.text())
         isPrintStack:bool = self.ui.cb_print_stack.checkState()==2
         default_print_info = self.ui.te_print_args.toPlainText()
+        print("default_print_info", default_print_info)
         script = self.generator.generate_for_funcs(self.hook_addr_list, hook_num,isPrintStack )
         if(self.isChecked(self.ui.cb_is_save_script)):
             with open("{}.js".format(self.func_name), "w") as f:
@@ -265,20 +266,22 @@ class HookConfigurationUi():
         script = gl.session.create_script(script)
         script.on('message', self.on_message)
         script.load()
+        self.ui.close()
     def on_message(self,message, data):
-        date = datetime.datetime.now()
-        formatted_date = date.strftime("%Y%m%d%H%M%S")
-        log_file = os.path.join(idb_path, "{}_{}.log".format(self.func_name, formatted_date))
-        print("{}{}\n".format(message, data))
-        content = "{}\n".format(message['payload'])
-        print(content)
-        
-        with open(log_file, "w+") as f:
-            f.write(content) 
+        if(message['type'] == 'send'):
+            date = datetime.datetime.now()
+            formatted_date = date.strftime("%Y%m%d%H%M%S")
+            log_file = os.path.join(idb_path, "{}_{}.log".format(self.func_name, formatted_date))
+            print("{}{}\n".format(message, data))
+            content = "{}\n".format(message['payload'])
+            print(content)
+            
+            with open(log_file, "w+") as f:
+                f.write(content) 
         
 #生成并运行hook脚本
 class RunGeneratedScript(IDAFridaMenuAction):
-    TopDescription = "FridaIDALazy"
+    TopDescription = "FridaIDALazy4"
 
     description = "start hook"
     
