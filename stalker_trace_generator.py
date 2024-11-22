@@ -11,83 +11,91 @@ func_addr = []
 func_name = []
 hook_list = []
 stalker_default_template = """
-var hook_list = []
 var func_addr = [func_addr]
 var func_name = [func_name]
 var so_name = "[filename]"
-function traceTarget(){
+function traceTarget() {
     let module = Process.findModuleByName(so_name)
-    if(module){
+    if (module) {
         let hook_addr = module.base.add([hook_off])
 
-        if(hook_addr){
-              Interceptor.attach(hook_addr, 
-                {
-                    onEnter(args){
-                        this.tid = Process.getCurrentThreadId()
-                        console.log("onenter")
-                        trace_so()
-                    },
-                    onLeave(ret){
-                        Stalker.unfollow(this.tid);
-                        send({'type':'unfollow', 'hookList':hook_list})
-                        console.log("trace end!")
-                    }
-                })
+        if (hook_addr) {
+            Interceptor.attach(hook_addr, {
+                onEnter(args) {
+                    console.log(`----------------start trace ${so_name}!${func_name}-------------`)
+                    this.tid = Process.getCurrentThreadId();
+                    Stalker.follow(this.threadId, {
+                        events: {
+                            call: true,
+                            ret: false,
+                            exec: false,
+                            block: false,
+                            compile: false,
+                        },
+                        onReceive: function (events) {
+                            let all_events = Stalker.parse(events)
+                            let call_info = []
+                            console.log(`envent length:${all_events.length}`)
+                            for (let i = 0; i < all_events.length; i++) {
+                                let event = all_events[i]
+                                let event_type = event[0]
+                                let call_from_addr = event[1]
+                                let call_from_module = Process.findModuleByAddress(call_from_addr)
+                                let call_to_addr = event[2]
+                                let call_to_module = Process.findModuleByAddress(call_to_addr);
+                                let num = event[3]
+                                if (call_from_module && call_to_module && call_from_module.name == "libwework_framework.so" && call_to_module.name == "libwework_framework.so") {
+                                    let call_from_off_addr = call_from_addr.sub(call_from_module.base)
+                                    let call_to_off_addr = call_to_addr.sub(call_to_module.base)
+                                    call_info.push({
+                                        'from': {
+                                            'module': call_from_module,
+                                            'off_addr': call_from_off_addr
+                                        },
+                                        'to': {
+                                            'module': call_to_module,
+                                            'off_addr': call_to_off_addr
+                                        }
+                                    })
+                                    console.log(`nativeLoginGetCaptcha stalker event info type:${event_type} from_addr:${call_from_module.name}!${call_from_off_addr} to_addr:${call_to_module.name}!${call_to_off_addr}`);
+                                }
+
+                            }
+                            //发送日志
+                            send({
+                                'type': 'callInfo',
+                                'list': call_info
+                            })
+                        },
+                        onCallSummary(summary) {
+                            let callSummaryInfo = [];
+                            console.log("-------------onCallSummary----------------")
+                            for (const addr in summary) {
+
+                                let module = Process.findModuleByAddress(addr)
+                                if (module && module.name == "libwework_framework.so") {
+                                    let off_addr = ptr(addr).sub(module.base);
+                                    callSummaryInfo.push({
+                                        'addr': off_addr
+                                    })
+                                    console.log(`key:${module.name}!${off_addr}`);
+                                }
+
+                            }
+                            //发送日志
+                            send({
+                                'type': 'callSummaryInfo',
+                                'list': callSummaryInfo
+                            })
+                        }
+                    })
+                }, onLeave(ret) {
+                    Stalker.unfollow(this.tid);
+                }
+            })
         }
     }
 }
-
-function trace_so(){
-    var times = 1;
-    var module = Process.getModuleByName(so_name);
-    var pid = Process.getCurrentThreadId();
-    console.log("start Stalker!");
-    Stalker.exclude({
-        "base": Process.getModuleByName("libc.so").base,
-        "size": Process.getModuleByName("libc.so").size
-    })
-    Stalker.follow(pid,{
-        events:{
-            call:false,
-            ret:false,
-            exec:false,
-            block:false, 
-            compile:false
-        },
-        onReceive:function(events){
-        },
-        transform: function (iterator) {
-            var instruction = iterator.next();
-            do{
-                let addr = instruction.address - module.base
-                if (func_addr.indexOf(instruction.address - module.base) != -1){
-                    console.log("call" + times+ ":" + func_name[func_addr.indexOf(instruction.address - module.base)])
-                    let func_n = func_name[func_addr.indexOf(addr)]
-                    let info = {}
-                    info.type = "data"
-                    info.times = times;
-                    info.addr = addr
-                    info.func_name = func_n
-                    hook_list.push(info);
-                    times=times+1
-                }
-            } while ((instruction = iterator.next()) !== null);
-        },
-
-        onCallSummary:function(summary){
-
-        }
-    });
-    console.log("Stalker end!");
-}
-traceTarget()
-
-rpc.exports = {
-  gethoolist: function () {
-    return hook_list;
-  }
-};
 """
 batch_hook_template = """
 
@@ -166,7 +174,29 @@ class ScriptGenerator:
     @staticmethod
     def get_idb_filename():
         return os.path.basename(idaapi.get_input_file_path())
+    def get_function_name(self,
+                          ea):  # https://hex-rays.com/products/ida/support/ida74_idapython_no_bc695_porting_guide.shtml
+        """
+        Get the real function name
+        """
+        # Try to demangle
+        function_name = idc.demangle_name(idc.get_func_name(ea), idc.get_inf_attr(idc.INF_SHORT_DN))
 
+        # if function_name:
+        #    function_name = function_name.split("(")[0]
+
+        # Function name is not mangled
+        if not function_name:
+            function_name = idc.get_func_name(ea)
+
+        if not function_name:
+            function_name = idc.get_name(ea, ida_name.GN_VISIBLE)
+
+        # If we still have no function name, make one up. Format is - 'UNKN_FNC_4120000'
+        if not function_name:
+            function_name = "UNKN_FNC_%s" % hex(ea)
+
+        return function_name
     @staticmethod
     def get_idb_path():
         return os.path.dirname(idaapi.get_input_file_path())
@@ -210,13 +240,6 @@ class ScriptGenerator:
         return s
     #根据so函数信息生成指定函数的stalker trace脚本
     def generate_stalker_scripts(self,addr):
-        for func_ea in idautils.Functions():
-                # thumb mode
-            if idc.get_sreg(func_ea, "T"):
-                func_addr.append(hex(func_ea + 1))
-            else:
-                func_addr.append(hex(func_ea))
-            func_name.append('{}'.format(idc.get_func_name(func_ea)))
         s = self.generate_stub(stalker_default_template, {
         "filename": os.path.basename(idaapi.get_input_file_path()),
         "func_addr":json.dumps(func_addr),
@@ -239,7 +262,7 @@ class StalkerTraceGenAction(IDAFridaMenuAction):
     traceHookList = []
     def __init__(self):
         super(StalkerTraceGenAction, self).__init__()
-        self.TopDescription = "stalker trace4"
+        self.TopDescription = "stalker trace"
         self.imagebase = idaapi.get_imagebase()
         self.scriptGen = ScriptGenerator(config)
         self.fridaHelper = FridaHelper()
@@ -264,18 +287,20 @@ class StalkerTraceGenAction(IDAFridaMenuAction):
     def on_trace_message(self, message, data):
         payload = message['payload']
         
-        if(payload['type'] == 'unfollow'):
+        if(payload['type'] == 'callSummaryInfo'):
             print("start deal trace hook")
             print("payload", payload)
-            hooList = payload['hookList']
+            hooList = payload['list']
             for item in hooList:
                 dec_func = idaapi.decompile(item['addr'])
-                self.traceHookList.append({'offset':item['addr'], 'func_name':item['func_name'], 'paramNum':dec_func.type.get_nargs()})
+                func_name = self.scriptGen.get_function_name(item['addr'])
+                self.traceHookList.append({'offset':item['addr'], 'func_name':func_name, 'paramNum':dec_func.type.get_nargs()})
             print("hookList:", self.traceHookList)
             #生成trace脚本
             trace_hook_script = self.scriptGen.generate_batch_trace_scripts(self.traceHookList)
+            print(trace_hook_script)
             #调用trace脚本
-            self.fridaHelper.start(trace_hook_script, self.on_trace_hook_message)
+            #self.fridaHelper.start(trace_hook_script, self.on_trace_hook_message)
         else:
             dec_func = idaapi.decompile(payload['addr'])
             ##获取trace结果

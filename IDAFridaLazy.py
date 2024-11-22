@@ -5,7 +5,26 @@ import os
 import json
 import idc
 import datetime
+from PyQt5 import uic
+from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout, QTextEdit, QMainWindow
 
+
+default_print_info = """
+function print_func_info(args, paramsNum,stage, _this, retval){
+        if(stage == "onEnter"){
+            _this.params = [];
+            for (let i = 0; i < paramsNum; i++) {
+                _this.params.push(args[i]);
+                _this.logs=_this.logs.concat("this.args" + i + " onEnter: " + print_arg(args[i]));
+            }
+        }else if(stage == "onLeave"){
+            for (let i = 0; i < paramsNum; i++) {
+                _this.logs=_this.logs.concat("this.args" + i + " onLeave: " + print_arg(this.params[i]));
+            }
+            _this.logs=_this.logs.concat("retval onLeave: " + print_arg(ptr(retval).add(0x10).readPointer()) + "\\n");
+        }
+    }
+"""
 
 default_template = """
 
@@ -21,7 +40,7 @@ default_template = """
             return addr + "\\n";
         }
     }
-
+    [print_func_info]
     // @ts-ignore
     function hook_native_addr(funcPtr, paramsNum) {
         var module = Process.findModuleByAddress(funcPtr);
@@ -29,21 +48,17 @@ default_template = """
             Interceptor.attach(funcPtr, {
                 onEnter: function (args) {
                     this.logs = "";
-                    this.params = [];
                     // @ts-ignore
                     this.logs=this.logs.concat("So: " + module.name + "  Method: [funcname] offset: " + ptr(funcPtr).sub(module.base) + "\\n");
-                    for (let i = 0; i < paramsNum; i++) {
-                        this.params.push(args[i]);
-                        this.logs=this.logs.concat("this.args" + i + " onEnter: " + print_arg(args[i]));
-                    }
+                    print_func_info(args, paramsNum, "onEnter", this, null)
                 }, onLeave: function (retval) {
-                    for (let i = 0; i < paramsNum; i++) {
-                        this.logs=this.logs.concat("this.args" + i + " onLeave: " + print_arg(this.params[i]));
+                    print_func_info(this.params, paramsNum, "onEnter", this, retval)
+                    if([isPrintStack]){
+                        this.logs=this.logs.concat('[funcname] called from:' +Thread.backtrace(this.context, Backtracer.ACCURATE)
+                        .map(DebugSymbol.fromAddress).join("\\n") + '\\n');
                     }
-                    this.logs=this.logs.concat("retval onLeave: " + print_arg(retval) + "\\n");
-                    console.log("new")
-                    send(this.logs);
-                }
+                    send(this.logs)
+            }
             });
         } catch (e) {
             send(e);
@@ -91,7 +106,7 @@ class Action(idaapi.action_handler_t):
 
     @property
     def name(self):
-        return "FridaIDALazy:" + type(self).__name__
+        return self.TopDescription + ":" + type(self).__name__
 
     def activate(self, ctx):
         # type: (idaapi.action_activation_ctx_t) -> None
@@ -120,7 +135,7 @@ class IDAFridaMenuAction(Action):
 class Configuration():
     template = None
     def __init__(self) -> None:
-        self.load()
+        #self.load()
         if self.template == None:
             self.template = default_template
     def store(self):
@@ -183,15 +198,19 @@ class ScriptGenerator:
             s = s.replace("[%s]" % key, v)
         return s
 
-    def generate_for_funcs(self, func_addr_list) -> str:
+    def generate_for_funcs(self, func_addr_list, paramNum=None, isPrintStack:bool=False) -> str:
         stubs = []
         for func_addr in func_addr_list:
-            dec_func = idaapi.decompile(func_addr)
+            if(paramNum == None or paramNum == 0):
+                dec_func = idaapi.decompile(func_addr)
+                paramNum = dec_func.type.get_nargs()
             repdata = {
                 "filename": self.get_idb_filename(),
                 "funcname": self.get_function_name(func_addr),
                 "offset": hex(func_addr - self.imagebase),
-                "nargs": hex(dec_func.type.get_nargs())
+                "nargs": hex(paramNum),
+                "isPrintStack":str(isPrintStack).lower(),
+                "print_func_info":default_print_info
             }
             stubs.append(self.generate_stub(repdata))
         return "\n".join(stubs)
@@ -203,6 +222,7 @@ gl = Global()
 #生成并运行hook脚本
 class StopFridaScript(IDAFridaMenuAction): 
     description = "stop hook"
+    TopDescription = "FridaIDALazy"
     def __init__(self):
         super(StopFridaScript, self).__init__()
        
@@ -212,35 +232,33 @@ class StopFridaScript(IDAFridaMenuAction):
        print("stop hook")
         
 
-idb_path = os.path.dirname(idaapi.get_input_file_path())   
-#生成并运行hook脚本
-class RunGeneratedScript(IDAFridaMenuAction):
-    description = "start hook"
-    
-    out_file = None
-    log_file = None
+idb_path = os.path.dirname(idaapi.get_input_file_path()) 
+
+class HookConfigurationUi():
     generator:ScriptGenerator = ScriptGenerator(global_config)
-    def __init__(self):
-        super(RunGeneratedScript, self).__init__()
-       
+    hook_addr_list = None
+    func_name = None
+    def __init__(self, params_num, hook_addr_list, func_name):
         self.device: frida.core.Device = frida.get_usb_device()
-        print("device:", self.device)
-       
-       
-    def read_frida_js_source(self):
-        with open(self.out_file, "r") as f:
-            return f.read()
-    def activate(self, ctx):
-       
-        if ctx.form_type==idaapi.BWN_FUNCS:
-            hook_addr_list = [idaapi.getn_func(idx).start_ea for idx in ctx.chooser_selection] #from "idaapi.getn_func(idx - 1)" to "idaapi.getn_func(idx)"
-        else:
-            hook_addr_list=[idaapi.get_func(idaapi.get_screen_ea()).start_ea]
-        self.func_name = self.generator.get_function_name(hook_addr_list[0])
-        script = self.generator.generate_for_funcs(hook_addr_list)
-        print("start hook")
+        cwdPath = os.environ['IDA_PLUGINS']
+        self.ui = uic.loadUi("{}{}hook.ui".format(cwdPath, os.sep))
+        self.ui.edit_hook_num.setText(str(params_num))
+        self.ui.te_print_args.setPlainText(default_print_info)
+        self.hook_addr_list = hook_addr_list
+        self.func_name = func_name
+        self.ui.btn_hook.clicked.connect(self.btn_hook_click)
+    def isChecked(self, cb) -> bool:
+        return cb.checkState()==2
+    def btn_hook_click(self):
+        hook_num = int(self.ui.edit_hook_num.text())
+        isPrintStack:bool = self.ui.cb_print_stack.checkState()==2
+        default_print_info = self.ui.te_print_args.toPlainText()
+        script = self.generator.generate_for_funcs(self.hook_addr_list, hook_num,isPrintStack )
+        if(self.isChecked(self.ui.cb_is_save_script)):
+            with open("{}.js".format(self.func_name), "w") as f:
+                f.write(script)
         pid = self.device.get_frontmost_application().pid
-        if gl.session !=None:
+        if gl.session:
             gl.session.detach()
         gl.session = self.device.attach(pid)
         
@@ -252,11 +270,43 @@ class RunGeneratedScript(IDAFridaMenuAction):
         formatted_date = date.strftime("%Y%m%d%H%M%S")
         log_file = os.path.join(idb_path, "{}_{}.log".format(self.func_name, formatted_date))
         print("{}{}\n".format(message, data))
-        # content = "{}\n".format(message['payload'])
-        # print(content)
+        content = "{}\n".format(message['payload'])
+        print(content)
         
-        # with open(log_file, "w+") as f:
-        #     f.write(content) 
+        with open(log_file, "w+") as f:
+            f.write(content) 
+        
+#生成并运行hook脚本
+class RunGeneratedScript(IDAFridaMenuAction):
+    TopDescription = "FridaIDALazy"
+
+    description = "start hook"
+    
+    out_file = None
+    log_file = None
+    generator:ScriptGenerator = ScriptGenerator(global_config)
+    def __init__(self):
+        super(RunGeneratedScript, self).__init__()
+       
+       
+       
+    def read_frida_js_source(self):
+        with open(self.out_file, "r") as f:
+            return f.read()
+    def activate(self, ctx):
+        if ctx.form_type==idaapi.BWN_FUNCS:
+            hook_addr_list = [idaapi.getn_func(idx).start_ea for idx in ctx.chooser_selection] #from "idaapi.getn_func(idx - 1)" to "idaapi.getn_func(idx)"
+        else:
+            hook_addr_list=[idaapi.get_func(idaapi.get_screen_ea()).start_ea]
+        self.func_name = self.generator.get_function_name(hook_addr_list[0])
+        dec_func = idaapi.decompile(hook_addr_list[0])
+        dialog = HookConfigurationUi(dec_func.type.get_nargs(), hook_addr_list, self.func_name)
+        dialog.ui.show()
+        dialog.ui.exec_()
+
+       
+        
+    
 
 print("IDAFridLazy!")
 
