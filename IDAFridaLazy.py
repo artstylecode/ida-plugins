@@ -278,14 +278,14 @@ class HookConfigurationUi():
         if(self.isChecked(self.ui.cb_is_save_script)):
             with open("{}.js".format(self.func_name), "w") as f:
                 f.write(script)
-        # pid = self.device.get_frontmost_application().pid
-        # if gl.session:
-        #     gl.session.detach()
-        # gl.session = self.device.attach(pid)
+        pid = self.device.get_frontmost_application().pid
+        if gl.session:
+            gl.session.detach()
+        gl.session = self.device.attach(pid)
         
-        # script = gl.session.create_script(script)
-        # script.on('message', self.on_message)
-        # script.load()
+        script = gl.session.create_script(script)
+        script.on('message', self.on_message)
+        script.load()
         self.ui.close()
     def on_message(self,message, data):
         if(message['type'] == 'send'):
