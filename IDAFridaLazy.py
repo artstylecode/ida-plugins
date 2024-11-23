@@ -6,7 +6,8 @@ import json
 import idc
 import datetime
 from PyQt5 import uic
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QVBoxLayout, QTextEdit, QMainWindow
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import  QApplication
 
 
 default_print_info = """
@@ -238,17 +239,36 @@ class HookConfigurationUi():
     generator:ScriptGenerator = ScriptGenerator(global_config)
     hook_addr_list = None
     func_name = None
+    origin_key_event = None
     def __init__(self, params_num, hook_addr_list, func_name):
         self.device: frida.core.Device = frida.get_usb_device()
         cwdPath = os.environ['IDA_PLUGINS']
         self.ui = uic.loadUi("{}{}hook.ui".format(cwdPath, os.sep))
         self.ui.edit_hook_num.setText(str(params_num))
-        #self.ui.te_print_args.setPlainText(default_print_info)
+        self.ui.te_print_args.setPlainText(default_print_info)
         self.hook_addr_list = hook_addr_list
         self.func_name = func_name
+        self.origin_key_event = self.ui.te_print_args.keyPressEvent
+        self.ui.te_print_args.keyPressEvent = self.keyPressEvent
         self.ui.btn_hook.clicked.connect(self.btn_hook_click)
+    def keyPressEvent(self, event):
+        # 检查是否是 Ctrl+V 或者 Command+V（MacOS）
+        if event.key() == Qt.Key_V and (event.modifiers() & Qt.ControlModifier or
+                                        event.modifiers() & Qt.MetaModifier):
+            clipboard = QApplication.clipboard()
+            pasted_text = clipboard.text()
+            print("Pasted text:", pasted_text)
+            self.ui.te_print_args.setPlainText(pasted_text)
+            # 在这里处理粘贴的文本
+            # ...
+        else:
+            self.origin_key_event(event)
     def isChecked(self, cb) -> bool:
         return cb.checkState()==2
+    def onPaste(self):
+        clipboard = QApplication.clipboard()
+        text = clipboard.text()
+        self.plainTextEdit.setPlainText(text)
     def btn_hook_click(self):
         hook_num = int(self.ui.edit_hook_num.text())
         isPrintStack:bool = self.ui.cb_print_stack.checkState()==2
@@ -258,14 +278,14 @@ class HookConfigurationUi():
         if(self.isChecked(self.ui.cb_is_save_script)):
             with open("{}.js".format(self.func_name), "w") as f:
                 f.write(script)
-        pid = self.device.get_frontmost_application().pid
-        if gl.session:
-            gl.session.detach()
-        gl.session = self.device.attach(pid)
+        # pid = self.device.get_frontmost_application().pid
+        # if gl.session:
+        #     gl.session.detach()
+        # gl.session = self.device.attach(pid)
         
-        script = gl.session.create_script(script)
-        script.on('message', self.on_message)
-        script.load()
+        # script = gl.session.create_script(script)
+        # script.on('message', self.on_message)
+        # script.load()
         self.ui.close()
     def on_message(self,message, data):
         if(message['type'] == 'send'):
@@ -281,7 +301,7 @@ class HookConfigurationUi():
         
 #生成并运行hook脚本
 class RunGeneratedScript(IDAFridaMenuAction):
-    TopDescription = "FridaIDALazy4"
+    TopDescription = "FridaIDALazy"
 
     description = "start hook"
     
